@@ -14,7 +14,7 @@ our $VERSION = '0.01';
 
 =head1 NAME
 
-Net::SSH::Config
+Net::SSH::Config - module for parsing ssh_config file(s).
 
 =head1 SYNOPSIS
 
@@ -26,137 +26,220 @@ Net::SSH::Config
 
 =cut
 
-my $config = File::HomeDir->my_home . "/.ssh/config";
-my $raValues = [
-  'file',
-  'host',
-  'attr',
-];
-
 sub new
 {
-  my ($class, $hParams) = @_;
+  my ($oClass, $hParams) = @_;
 
-  my $self = bless $hParams, $class;
+  $hParams //= {};
 
-  $hParams = $self->_new_param($hParams);
+  my $oSelf = bless $hParams, $oClass;
+
   while (my ($key, $value) = each %{$hParams})
   {
-    $self->{$key} = $value;
+    $oSelf->{$key} = $value;
   }
-  if ($hParams->{file})
+
+  return $oSelf;
+}
+
+sub _store_new_file
+{
+  my ($oSelf, $file) = @_;
+
+  my $oFH = $oSelf->_get_fh($file);
+
+  return $oSelf->store_parsed($oFH);
+}
+
+sub _get_fh
+{
+  my ($oSelf, $file) = @_;
+
+  open (my $oFH, "<", "$file") or
+    die "Unable to read $file: $!\n";
+
+  return $oFH;
+}
+
+sub _default_fh
+{
+  my ($oSelf) = @_;
+
+  return $oSelf->_get_fh(File::HomeDir->my_home . "/.ssh/config");
+}
+
+# TODO Should go through default paths for the config file
+sub _choose_fh
+{
+  my ($oSelf, $file) = @_;
+
+  my $oFH;
+  if (defined($file))
   {
-    ($self->{fh}, $self->{mtime}) = $self->_init({}, $hParams);
+    $oFH = $oSelf->_get_fh($file);
   }
-
-  return $self;
-}
-
-sub _new_param
-{
-  my ($self, $hParams) = @_;
-
-  my ($ret, $trash);
-  foreach my $val (@$raValues)
+  elsif (exists($oSelf->{fh}))
   {
-    ($ret->{$val}) = $self->$val;
+    $oFH = $oSelf->{fh};
+  }
+  else
+  {
+    $oFH = $oSelf->_default_fh();
   }
 
-  return $ret;
+  return $oFH;
 }
 
-sub file
+=head1 get_data([$file])
+
+Return parsed data from a file
+
+=cut
+
+sub get_data
 {
-  my ($self, $file) = @_;
+  my ($oSelf, $file) = @_;
 
-  my $old_file = $self->{file};
-  $file //= $self->{file};
+  my $oFH = $oSelf->_choose_fh($file);
 
-  return ($file, $old_file);
+  return $oSelf->parse($oFH);
 }
 
-sub host
+=head1 store_parsed($oFH)
+
+Add data to internal structure
+
+=cut
+
+sub store_parsed
 {
-  my ($self, $host) = @_;
+  my ($oSelf, $oFH) = @_;
 
-  my $old_host = $self->{host};
-  $host //= $self->{host};
+  $oSelf->{data} //= [];
+  my $sPreCount = scalar(@{$oSelf->{data}});
 
-  return ($host, $old_host);
+  push @{$oSelf->{data}}, $oSelf->parse($oFH);
+
+  return (scalar(@{$oSelf->{data}}) - $sPreCount);
 }
 
-sub attr
-{
-  my ($self, $attr) = @_;
+=head2 parse($oFH)
 
-  my $ret;
-  $ret = $self->{attr} if (defined($self->{attr}));
-  push @$ret, (ref($attr) eq 'ARRAY' ? @{$attr} : $attr)
-    if (defined($attr));
-  
-  return ($ret);
-}
+Determine which file to parse and return a data structure
 
+=cut
+
+# TODO Allow a string of config data to be passed
 sub parse
 {
-  my ($self, $hParams) = @_;
+  my ($oSelf, $oFH) = @_;
 
-  my $hTempParams = $self->_new_param($hParams);
+  die "Not a valid file handle\n" 
+    if (not defined($oFH) or ref($oFH) ne 'GLOB');
 
-  return if (not defined($hTempParams->{host}));
-
-  my ($fh) = $self->_init($hTempParams);
-  return if (not defined($fh));
-
-  # Nothing has changed.
-  return if (not $fh);
-
-  my ($host, $ret);
-  while (my $line = <$fh>)
+  my $paData;
+  while (my $sLine = <$oFH>)
   {
+    chomp($sLine);
     # Blank line or comment
-    next if ($line =~ /^ *#? *$/);
-    if ($line =~ /^ *host (.*)$/i)
+    next if ($sLine =~ /^ *(?:#.*)?$/);
+    $sLine =~ s/^ *//;
+    if ($sLine =~ /^host (.*)$/i)
     {
-      my @hosts_re = map {$_ =~ s/\*/\.\*/r} split(" ", $1);
-      $host = (grep {$hTempParams->{host} =~ /\Q$_/} @hosts_re ? 1 : 0);
+      my $sHosts = my $sOrig = $1;
+      $sHosts =~ s/ +/ /g; # No multiple spaces
+      my @aHosts = split(",", $sHosts);
+      $sHosts =~ s/ /\|/g; # Replace space with regex OR
+      $sHosts =~ s/\*/\.\*/g; # Replace * with ssh .*
+      push @$paData, {
+        'regex' => $sHosts,
+        'hosts' => [@aHosts],
+        'orig'  => $sOrig,
+      };
     }
-    elsif ($host and $line =~ /^ *([a-zA-Z0-9]+) (.*)$/)
+    elsif (ref($paData) eq 'ARRAY' and scalar(@$paData) and 
+      exists($paData->[-1]{orig}) and 
+      $sLine =~ /^([^ ]+) ([^ ]+.*)/)
     {
-      $ret->{$1} //= $2;
+      # TODO Check valid parameters
+      $paData->[-1]{$1} = $2;
+    }
+    elsif ($sLine =~ /^([^ ]+) ([^ ]+.*)/)
+    {
+      $paData->[0]{$1} = $2;
     }
     else
     {
-      warn "There was a parser error with: " . $hTempParams->{file} . 
-        " at line [$.] $line.\n";
+      warn "There was a parser error with: " .
+        " at line [$.] $sLine.\n";
     }
   }
 
-  return $ret;
+  return $paData;
 }
 
-sub _init
+sub get_options
 {
-  my ($self, $hParams) = @_;
+  my ($oSelf, $sHost, $sOpt) = @_;
 
-  die "No file specified\n"
-    if (not defined($hParams->{file}));
+  return "Bad hostname [$sHost]" if ($sHost =~ /[^a-zA-Z0-9*.-]+/);
 
-  my $mtime = (stat $hParams->{file})[9];
-
-  if (exists($self->{mtime})
-    and $self->{mtime} eq $mtime
-    and defined($hParams->{config})
-    and defined($self->{config})
-    and $self->{config} eq $hParams->{config})
+  my $paParseData;
+  if (exists($oSelf->{data}) and scalar(@{$oSelf->{data}}))
   {
-    return 0;
+    $paParseData = $oSelf->{data};
+  }
+  else
+  {
+    $paParseData = $oSelf->get_data();
   }
 
-  open(my $fh, "<", $hParams->{config})
-    or die "Could not open " . $hParams->{config} . ": $!";
+  my $phData;
+  foreach my $phHost (@{$paParseData})
+  {
+    next if ($sHost !~ /($phHost->{regex})/);
+    foreach my $sKey (keys %{$phHost})
+    {
+      my $sLowerKey = lc($sKey);
+      if ($sLowerKey =~ /identityfile/)
+      {
+        push @{$phData->{$sLowerKey}}, $phHost->{$sKey};
+        $phData->{_data}{$phHost->{orig}}{'IdentityFile'}++;
+      }
+      elsif (not exists($phData->{$sLowerKey}))
+      {
+        $phData->{$sLowerKey} = $phHost->{$sKey};
+        $phData->{_data}{$phHost->{orig}}{$sKey} = $phHost->{$sKey};
+      }
+    }
+  }
 
-  return ($fh, $mtime);
+  if (defined($sOpt))
+  {
+    my $sLowerOpt = lc($sOpt);
+    return ($phData->{$sLowerOpt} // undef);
+  }
+  else
+  {
+    return $phData;
+  }
 }
+
   
 1;
+
+__END__
+
+=head1 AUTHOR
+
+Shawn Wilson E<lt>swilson@korelogic.comE<gt>
+
+=head1 COPYRIGHT
+
+Copyright 2014 - Shawn Wilson
+
+=head1 LICENSE
+
+The GNU Lesser General Public License, version 3.0 (LGPL-3.0)
+http://opensource.org/licenses/LGPL-3.0
+
