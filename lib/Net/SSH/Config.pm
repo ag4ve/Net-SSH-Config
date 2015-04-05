@@ -18,7 +18,11 @@ Net::SSH::Config - module for parsing ssh_config file(s).
 
 =head1 SYNOPSIS
 
+  use Data::Dumper;
   use Net::SSH::Config
+
+  my $config = Net::SSH::Config->new;
+  print Dumper($config->get_options("host", "user"));
 
 =head1 DESCRIPTION
 
@@ -142,8 +146,8 @@ sub parse
   {
     chomp($sLine);
     # Blank line or comment
-    next if ($sLine =~ /^ *(?:#.*)?$/);
-    $sLine =~ s/^ *//;
+    next if ($sLine =~ /^[\t ]*(?:#.*)?$/);
+    $sLine =~ s/^[\t ]*//;
     if ($sLine =~ /^host (.*)$/i)
     {
       my $sHosts = my $sOrig = $1;
@@ -182,7 +186,7 @@ sub get_options
 {
   my ($oSelf, $sHost, $sOpt) = @_;
 
-  return "Bad hostname [$sHost]" if ($sHost =~ /[^a-zA-Z0-9*.-]+/);
+  return "Bad hostname [$sHost]" if ($sHost =~ /[^a-zA-Z0-9*.:-]+/);
 
   my $paParseData;
   if (exists($oSelf->{data}) and scalar(@{$oSelf->{data}}))
