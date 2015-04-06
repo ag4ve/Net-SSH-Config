@@ -148,6 +148,7 @@ sub parse
     # Blank line or comment
     next if ($sLine =~ /^[\t ]*(?:#.*)?$/);
     $sLine =~ s/^[\t ]*//;
+    $sLine =~ s/[\t ]*$//;
     if ($sLine =~ /^host (.*)$/i)
     {
       my $sHosts = my $sOrig = $1;
