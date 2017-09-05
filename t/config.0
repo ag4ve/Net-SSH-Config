@@ -1,0 +1,7 @@
+
+Host foo bar
+  user doe
+  IdentityFile ~/.ssh/id_rsa
+
+Host *
+  Port 22
