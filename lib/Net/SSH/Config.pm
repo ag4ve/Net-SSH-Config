@@ -4,8 +4,6 @@ use strict;
 use warnings;
 use 5.010;
 
-use Data::Dumper;
-
 use File::HomeDir;
 
 our $VERSION = '0.01';
@@ -26,7 +24,7 @@ Net::SSH::Config - module for parsing ssh_config file(s).
 
 =head1 DESCRIPTION
 
-.
+Parse ssh_config file and present a perl data structure (or a specific option).
 
 =cut
 
@@ -46,52 +44,70 @@ sub new
   return $oSelf;
 }
 
-sub _store_new_file
+sub _store_new_files
 {
-  my ($oSelf, $file) = @_;
+  my ($oSelf, @aFiles) = @_;
 
-  my $oFH = $oSelf->_get_fh($file);
+  my @aFHs = $oSelf->_get_fhs(@aFiles);
 
-  return $oSelf->store_parsed($oFH);
+  my $sAdditions = 0;
+  foreach my $oFH (@aFHs)
+  {
+    $sAdditions += $oSelf->store_parsed($oFH);
+  }
+
+  return $sAdditions;
 }
 
-sub _get_fh
+# Return an array of filehandles
+sub _get_fhs
 {
-  my ($oSelf, $file) = @_;
+  my ($oSelf, @aFiles) = @_;
 
-  open (my $oFH, "<", "$file") or
-    die "Unable to read $file: $!\n";
+  my @aFHs;
+  foreach my $sFile (@aFiles)
+  {
+    next if (not -e "$sFile");
+    open (my $oFH, "<", "$sFile") or
+      die "Unable to read $sFile: $!\n";
+    push @aFHs, $oFH;
+  }
 
-  return $oFH;
+  return @aFHs;
 }
 
+# Return a list of config files ssh would use
 sub _default_fh
 {
   my ($oSelf) = @_;
 
-  return $oSelf->_get_fh(File::HomeDir->my_home . "/.ssh/config");
+  return $oSelf->_get_fhs(
+    "/etc/ssh/ssh_config",
+    "/usr/local/etc/ssh/ssh_config",
+    File::HomeDir->my_home . "/.ssh/config",
+  );
 }
 
-# TODO Should go through default paths for the config file
+# Return an array of filehandle(s)
 sub _choose_fh
 {
-  my ($oSelf, $file) = @_;
+  my ($oSelf, $paFile) = @_;
 
-  my $oFH;
-  if (defined($file))
+  my @aFHs;
+  if (defined($paFile))
   {
-    $oFH = $oSelf->_get_fh($file);
+    @aFHs = $oSelf->_get_fhs($paFile);
   }
   elsif (exists($oSelf->{fh}))
   {
-    $oFH = $oSelf->{fh};
+    @aFHs = $oSelf->{fhs};
   }
   else
   {
-    $oFH = $oSelf->_default_fh();
+    @aFHs = $oSelf->_default_fh();
   }
 
-  return $oFH;
+  return @aFHs;
 }
 
 =head1 get_data([$file])
@@ -102,9 +118,9 @@ Return parsed data from a file
 
 sub get_data
 {
-  my ($oSelf, $file) = @_;
+  my ($oSelf, $paFile) = @_;
 
-  my $oFH = $oSelf->_choose_fh($file);
+  my $oFH = $oSelf->_choose_fh($paFile // $oSelf->{files});
 
   return $oSelf->parse($oFH);
 }
@@ -175,8 +191,7 @@ sub parse
     }
     else
     {
-      warn "There was a parser error with: " .
-        " at line [$.] $sLine.\n";
+      warn "There was a parser error with line [$.] $sLine.\n";
     }
   }
 
